@@ -13,3 +13,13 @@
 .externalNativeBuild
 .cxx
 local.properties
+/.claude/
+/REFERENCEFILES/
+AGENTS.md
+echo-course.html
+echo-handbuch.html
+echo-handbuch.md
+
+.claude/
+.idea/copilot.data.migration.*.xml
+AGENTS.md
