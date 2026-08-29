@@ -34,23 +34,6 @@ import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
-/**
- * High-Performance VPN Service for network traffic analysis.
- *
- * PERFORMANCE-OPTIMIZED APPROACH:
- * ===============================
- * 1. Route ONLY DNS traffic through VPN for query/response capture
- * 2. Use NetworkStatsManager API for per-app byte/packet counts (zero overhead)
- * 3. Extract TLS/SNI info from initial connection packets only
- * 4. Use thread pool for concurrent DNS forwarding
- *
- * This approach provides ALL scientific data without slowing down internet:
- * - Per-app bytes sent/received (from NetworkStats)
- * - DNS queries and responses per app
- * - TLS/SNI hostnames from connection handshakes
- * - Protocol distribution
- * - Connection timing
- */
 class TrafficAnalyzerVpnService : VpnService() {
 
     companion object {
@@ -196,7 +179,7 @@ class TrafficAnalyzerVpnService : VpnService() {
                 .addRoute(UPSTREAM_DNS_2, 32)
                 .addDnsServer(UPSTREAM_DNS_1)
                 .addDnsServer(UPSTREAM_DNS_2)
-                .setBlocking(false)  // Non-blocking for better performance
+                .setBlocking(false)
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 builder.setMetered(false)
@@ -259,9 +242,7 @@ class TrafficAnalyzerVpnService : VpnService() {
      * NetworkStatsManager.querySummary() was previously the primary source,
      * but it reads from a periodically-synced stats database that can lag
      * behind actual traffic by seconds to minutes — especially during short
-     * measurement sessions (< 5 minutes). This lag caused significant
-     * underreporting (e.g., 280 KB reported vs 1.2 MB actual on a 30-second
-     * Google Maps session).
+     * measurement sessions (< 5 minutes).
      */
     private fun initializeTrafficBaseline() {
         trafficStatsBaseline.clear()
@@ -859,11 +840,6 @@ class TrafficAnalyzerVpnService : VpnService() {
         Log.d(TAG, "Stats poll: ${totalDnsQueries.get()} DNS, ${knownUids.size} UIDs tracked, $appsWithTraffic with new traffic")
     }
 
-    // NOTE: pollTrafficStatsFallback() has been removed — its logic is now
-    // the primary path in pollNetworkStats() above.
-
-    // NOTE: collectCurrentStats() has been removed — TrafficStats is now the
-    // primary data source, reading directly from kernel counters.
 
     // ===== NetworkStatsManager Fallback =====
 

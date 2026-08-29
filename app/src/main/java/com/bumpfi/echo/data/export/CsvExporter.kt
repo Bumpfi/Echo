@@ -16,14 +16,6 @@ import kotlin.math.ln
 
 /**
  * CSV Exporter for scientific data analysis.
- *
- * Exports per-app measurement session data as clean CSV suitable for:
- * - Excel
- * - Python pandas
- * - R
- * - Tableau
- * - Power BI
- *
  * Provides two export types:
  * 1. Aggregated metrics (one row per app session) - for statistical analysis
  * 2. Raw data (connections, DNS, destinations) - for detailed scientific review
