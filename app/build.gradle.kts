@@ -20,6 +20,8 @@ android {
 
     buildTypes {
         release {
+            // ponytail: debug key so the release build installs for local perf testing; swap for a real keystore before distributing
+            signingConfig = signingConfigs.getByName("debug")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

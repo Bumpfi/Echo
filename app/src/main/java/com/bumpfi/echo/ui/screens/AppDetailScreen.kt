@@ -161,10 +161,10 @@ fun OverviewTab(
     formatBytes: (Long) -> String
 ) {
     val uniqueDestinations = connections.map { it.destinationAddress }.toSet().size
-    val encryptedConnections = connections.count { it.isEncrypted }
-    val encryptedPercentage = if (connections.isNotEmpty()) {
-        (encryptedConnections * 100 / connections.size)
-    } else 0
+    val encryptedConnections = connections.count { it.isEncrypted == true }
+    val knownEncryption = connections.count { it.isEncrypted != null }
+    // null = encryption not measured for any connection
+    val encryptedPercentage = if (knownEncryption > 0) encryptedConnections * 100 / knownEncryption else null
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -246,8 +246,9 @@ fun OverviewTab(
                     MetricRow(
                         icon = Icons.Filled.Lock,
                         label = "Encrypted (HTTPS)",
-                        value = "$encryptedPercentage%",
+                        value = encryptedPercentage?.let { "$it%" } ?: "unknown",
                         valueColor = when {
+                            encryptedPercentage == null -> MaterialTheme.colorScheme.outline
                             encryptedPercentage >= 80 -> MaterialTheme.colorScheme.primary
                             encryptedPercentage >= 50 -> MaterialTheme.colorScheme.tertiary
                             else -> MaterialTheme.colorScheme.error
@@ -557,12 +558,20 @@ fun ConnectionCard(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Icon(
-                        imageVector = if (connection.isEncrypted) Icons.Filled.Lock else Icons.Filled.LockOpen,
-                        contentDescription = if (connection.isEncrypted) "Encrypted" else "Unencrypted",
-                        tint = if (connection.isEncrypted) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.error
+                        imageVector = when (connection.isEncrypted) {
+                            true -> Icons.Filled.Lock
+                            false -> Icons.Filled.LockOpen
+                            null -> Icons.Outlined.HelpOutline
+                        },
+                        contentDescription = when (connection.isEncrypted) {
+                            true -> "Encrypted"
+                            false -> "Unencrypted"
+                            null -> "Encryption unknown"
+                        },
+                        tint = when (connection.isEncrypted) {
+                            true -> MaterialTheme.colorScheme.primary
+                            false -> MaterialTheme.colorScheme.error
+                            null -> MaterialTheme.colorScheme.outline
                         },
                         modifier = Modifier.size(16.dp)
                     )
@@ -572,7 +581,7 @@ fun ConnectionCard(
                         color = MaterialTheme.colorScheme.primary
                     )
                     // Show TLS version if encrypted
-                    if (connection.isEncrypted && connection.tlsVersion != null) {
+                    if (connection.isEncrypted == true && connection.tlsVersion != null) {
                         Surface(
                             shape = RoundedCornerShape(4.dp),
                             color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)

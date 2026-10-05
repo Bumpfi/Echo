@@ -1,12 +1,19 @@
 package com.bumpfi.echo.data.model
 
 import android.graphics.drawable.Drawable
+import androidx.compose.runtime.Immutable
 import com.bumpfi.echo.data.tracking.ConnectionClassification
 import com.bumpfi.echo.data.tracking.TrackerDatabase
+
+/** Destination used when traffic bytes cannot be attributed to any destination. */
+const val UNATTRIBUTED = "unattributed"
 
 /**
  * Represents traffic data for a single app.
  */
+// ponytail: @Immutable holds only for the snapshots TrafficRepository publishes to the UI;
+// the repository's internal instances are still mutated.
+@Immutable
 data class AppTrafficInfo(
     val packageName: String,
     val appName: String,
@@ -64,16 +71,17 @@ data class AppTrafficInfo(
     }
 
     // ===== 6.3 Encryption Metrics =====
-    /** encryptedConnections = HTTPS/TLS connections */
-    val encryptedConnections: Int get() = connections.count { it.isEncrypted }
+    /** encryptedConnections = connections with observed TLS */
+    val encryptedConnections: Int get() = connections.count { it.isEncrypted == true }
 
-    /** unencryptedConnections = HTTP connections */
-    val unencryptedConnections: Int get() = connections.count { !it.isEncrypted }
+    /** unencryptedConnections = connections verified as unencrypted */
+    val unencryptedConnections: Int get() = connections.count { it.isEncrypted == false }
 
-    /** encryptionRate = encrypted / total (0-1 ratio) */
-    val encryptionRate: Double get() = if (connectionCount > 0) {
-        encryptedConnections.toDouble() / connectionCount.toDouble()
-    } else 0.0
+    /** encryptionRate = encrypted / connections with known encryption (0-1 ratio) */
+    val encryptionRate: Double get() {
+        val known = encryptedConnections + unencryptedConnections
+        return if (known > 0) encryptedConnections.toDouble() / known else 0.0
+    }
 
     // ===== 6.4 Protocol Analysis =====
     /** tcpConnections = TCP connections count */
@@ -195,7 +203,8 @@ data class ConnectionInfo(
     val packetsReceived: Long = 0,
     val hostname: String? = null,
     val country: String? = null,
-    val isEncrypted: Boolean = false,
+    /** true = TLS observed, false = verified unencrypted, null = not measured */
+    val isEncrypted: Boolean? = null,
     val tlsVersion: String? = null,
     val sniHostname: String? = null,
     val connectionDuration: Long = 0,

@@ -5,6 +5,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 
 class TrafficRepository {
@@ -35,6 +37,14 @@ class TrafficRepository {
     private val _dnsQueryCount = MutableStateFlow(0)
     val dnsQueryCount: StateFlow<Int> = _dnsQueryCount.asStateFlow()
 
+    // Running totals; written by VPN threads, pushed to the StateFlows in publish()
+    private val bytesSent = AtomicLong(0)
+    private val bytesReceived = AtomicLong(0)
+    private val packetsSent = AtomicLong(0)
+    private val packetsReceived = AtomicLong(0)
+    private val connectionTotal = AtomicInteger(0)
+    private val dnsQueryTotal = AtomicInteger(0)
+
     // Protocol distribution tracking
     private val protocolCounts = ConcurrentHashMap<Protocol, Long>()
 
@@ -42,8 +52,8 @@ class TrafficRepository {
     private val tlsVersionCounts = ConcurrentHashMap<TlsVersion, Int>()
 
     // Encrypted vs unencrypted traffic
-    private var encryptedBytes = 0L
-    private var unencryptedBytes = 0L
+    private val encryptedBytes = AtomicLong(0)
+    private val unencryptedBytes = AtomicLong(0)
 
     private var sessionStartTime: Long = 0
 
@@ -73,8 +83,6 @@ class TrafficRepository {
     ) {
         val now = System.currentTimeMillis()
 
-        android.util.Log.d("TrafficRepo", "recordConnection: $appName bytes=${connection.bytesSent + connection.bytesReceived}")
-
         val appTraffic = trafficByApp.getOrPut(packageName) {
             AppTrafficInfo(
                 packageName = packageName,
@@ -89,22 +97,22 @@ class TrafficRepository {
 
         // Thread-safe update — merge into existing entry if same destination
         synchronized(appTraffic.connections) {
-            // If this is a REAL destination (not "unknown"), absorb any previously
-            // accumulated "unknown" bytes into this entry. This handles the race where
+            // If this is a REAL destination (not unattributed), absorb any previously
+            // accumulated unattributed bytes into this entry. This handles the race where
             // early poll cycles fire before DNS/TLS resolution completes.
             var extraRx = 0L
             var extraTx = 0L
-            if (connection.destinationAddress != "unknown") {
+            if (connection.destinationAddress != UNATTRIBUTED) {
                 val unknownIndex = appTraffic.connections.indexOfFirst {
-                    it.destinationAddress == "unknown" && it.destinationPort == 0
+                    it.destinationAddress == UNATTRIBUTED && it.destinationPort == 0
                 }
                 if (unknownIndex >= 0) {
                     val unknownEntry = appTraffic.connections.removeAt(unknownIndex)
                     extraRx = unknownEntry.bytesReceived
                     extraTx = unknownEntry.bytesSent
-                    // connectionCount was already incremented for the unknown entry;
+                    // connectionCount was already incremented for the unattributed entry;
                     // we're replacing it, not adding a new one, so decrement
-                    _connectionCount.value = (_connectionCount.value - 1).coerceAtLeast(0)
+                    connectionTotal.decrementAndGet()
                 }
             }
 
@@ -124,7 +132,8 @@ class TrafficRepository {
                     // Update metadata if the new entry has better info
                     hostname = connection.hostname ?: existing.hostname,
                     sniHostname = connection.sniHostname ?: existing.sniHostname,
-                    isEncrypted = existing.isEncrypted || connection.isEncrypted,
+                    isEncrypted = if (existing.isEncrypted == true || connection.isEncrypted == true) true
+                                  else existing.isEncrypted ?: connection.isEncrypted,
                     tlsVersion = connection.tlsVersion ?: existing.tlsVersion,
                     connectionDuration = now - existing.timestamp
                 )
@@ -145,31 +154,29 @@ class TrafficRepository {
         }
 
         // Update totals
-        _totalBytesSent.value += connection.bytesSent
-        _totalBytesReceived.value += connection.bytesReceived
-        _totalPacketsSent.value += connection.packetsSent
-        _totalPacketsReceived.value += connection.packetsReceived
+        bytesSent.addAndGet(connection.bytesSent)
+        bytesReceived.addAndGet(connection.bytesReceived)
+        packetsSent.addAndGet(connection.packetsSent)
+        packetsReceived.addAndGet(connection.packetsReceived)
         if (isNewConnection) {
-            _connectionCount.value++
+            connectionTotal.incrementAndGet()
         }
 
         // Track protocol distribution
-        val currentCount = protocolCounts.getOrDefault(connection.protocol, 0L)
-        protocolCounts[connection.protocol] = currentCount + connection.totalBytes
+        protocolCounts.merge(connection.protocol, connection.totalBytes, Long::plus)
 
-        // Track encryption
-        if (connection.isEncrypted) {
-            encryptedBytes += connection.totalBytes
-        } else {
-            unencryptedBytes += connection.totalBytes
+        // Track encryption (unmeasured encryption is counted in neither bucket)
+        when (connection.isEncrypted) {
+            true -> encryptedBytes.addAndGet(connection.totalBytes)
+            false -> unencryptedBytes.addAndGet(connection.totalBytes)
+            null -> {}
         }
 
         // Track TLS version if available (only for new connections to avoid double-counting)
         if (isNewConnection && connection.tlsVersion != null) {
             try {
                 val version = TlsVersion.valueOf(connection.tlsVersion)
-                val count = tlsVersionCounts.getOrDefault(version, 0)
-                tlsVersionCounts[version] = count + 1
+                tlsVersionCounts.merge(version, 1, Int::plus)
             } catch (e: Exception) {
                 // Ignore invalid TLS version strings
             }
@@ -191,9 +198,6 @@ class TrafficRepository {
             lastSeenTimestamp = now
         )
         trafficByApp[packageName] = updatedApp
-
-        // Notify observers
-        updateAppTrafficList()
     }
 
     /**
@@ -228,10 +232,9 @@ class TrafficRepository {
             }
             if (!isDuplicate) {
                 appTraffic.dnsQueries.add(dnsQuery)
-                _dnsQueryCount.value++
+                dnsQueryTotal.incrementAndGet()
             }
         }
-        updateAppTrafficList()
     }
 
     /**
@@ -252,26 +255,10 @@ class TrafficRepository {
                     appTraffic.tlsConnections.add(tlsInfo)
 
                     // Track TLS version distribution
-                    val count = tlsVersionCounts.getOrDefault(tlsInfo.tlsVersion, 0)
-                    tlsVersionCounts[tlsInfo.tlsVersion] = count + 1
+                    tlsVersionCounts.merge(tlsInfo.tlsVersion, 1, Int::plus)
                 }
             }
-            updateAppTrafficList()
         }
-    }
-
-    /**
-     * Get traffic info for a specific app.
-     */
-    fun getAppTraffic(packageName: String): AppTrafficInfo? {
-        return trafficByApp[packageName]
-    }
-
-    /**
-     * Get all connections for an app.
-     */
-    fun getConnectionsForApp(packageName: String): List<ConnectionInfo> {
-        return trafficByApp[packageName]?.connections?.toList() ?: emptyList()
     }
 
     /**
@@ -281,21 +268,33 @@ class TrafficRepository {
         trafficByApp.clear()
         protocolCounts.clear()
         tlsVersionCounts.clear()
-        encryptedBytes = 0L
-        unencryptedBytes = 0L
-        _totalBytesSent.value = 0
-        _totalBytesReceived.value = 0
-        _totalPacketsSent.value = 0
-        _totalPacketsReceived.value = 0
-        _connectionCount.value = 0
-        _dnsQueryCount.value = 0
-        _appTrafficList.value = emptyList()
+        listOf(encryptedBytes, unencryptedBytes, bytesSent, bytesReceived, packetsSent, packetsReceived).forEach { it.set(0) }
+        connectionTotal.set(0)
+        dnsQueryTotal.set(0)
         sessionStartTime = 0
+        publish()
     }
 
-    private fun updateAppTrafficList() {
-        _appTrafficList.value = trafficByApp.values.sortedByDescending { it.totalBytes }
+    /**
+     * Push the current state to observers. Called once per stats poll (every 2s)
+     * instead of on every record call, so the UI isn't flooded with updates.
+     * Observers get copies of the per-app lists, safe to read while VPN threads keep writing.
+     */
+    fun publish() {
+        _appTrafficList.value = trafficByApp.values.map { it.snapshot() }.sortedByDescending { it.totalBytes }
+        _totalBytesSent.value = bytesSent.get()
+        _totalBytesReceived.value = bytesReceived.get()
+        _totalPacketsSent.value = packetsSent.get()
+        _totalPacketsReceived.value = packetsReceived.get()
+        _connectionCount.value = connectionTotal.get()
+        _dnsQueryCount.value = dnsQueryTotal.get()
     }
+
+    private fun AppTrafficInfo.snapshot(): AppTrafficInfo = copy(
+        connections = synchronized(connections) { connections.toMutableList() },
+        dnsQueries = synchronized(dnsQueries) { dnsQueries.toMutableList() },
+        tlsConnections = synchronized(tlsConnections) { tlsConnections.toMutableList() }
+    )
 
     /**
      * Get session duration in milliseconds.

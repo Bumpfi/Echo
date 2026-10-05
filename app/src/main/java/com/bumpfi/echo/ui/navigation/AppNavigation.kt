@@ -32,6 +32,7 @@ fun AppNavigation(
 ) {
     val navController = rememberNavController()
     val uiState by viewModel.uiState.collectAsState()
+    val sessionDuration by viewModel.sessionDuration.collectAsState()
     val selectedApp by viewModel.selectedApp.collectAsState()
     val autoStopEnabled by viewModel.autoStopEnabled.collectAsState()
     val context = LocalContext.current
@@ -53,6 +54,7 @@ fun AppNavigation(
 
             DashboardScreen(
                 uiState = uiState,
+                sessionDuration = { sessionDuration },
                 onToggleRecording = {
                     val intent = viewModel.toggleRecording()
                     if (intent != null) {
@@ -78,14 +80,13 @@ fun AppNavigation(
 
         composable(Screen.AppDetail.route) { backStackEntry ->
             val packageName = backStackEntry.arguments?.getString("packageName")
-            val app = selectedApp ?: viewModel.trafficRepository.getAppTraffic(packageName ?: "")
+            // Latest published snapshot, so the detail view stays live while recording
+            val app = uiState.appTrafficList.find { it.packageName == packageName } ?: selectedApp
 
             if (app != null) {
-                val connections = viewModel.getConnectionsForApp(app.packageName)
-
                 AppDetailScreen(
                     app = app,
-                    connections = connections,
+                    connections = app.connections,
                     onBackClick = {
                         viewModel.clearSelectedApp()
                         navController.popBackStack()

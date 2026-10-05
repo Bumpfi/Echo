@@ -85,7 +85,7 @@ class TrafficAnalyzerVpnService : VpnService() {
     private val pendingDnsQueries = ConcurrentHashMap<Int, PendingDnsQuery>() // transactionId -> query info
     private val dnsCache = ConcurrentHashMap<String, String>() // IP -> hostname
 
-    // Per-app DNS queries tracking - which domains each app has queried
+    // Per-app DNS queries tracking - which domains each app has queried (guarded by synchronized(list))
     private val appDnsQueries = ConcurrentHashMap<Int, MutableList<String>>() // uid -> list of domains queried
 
     // Per-app traffic tracking via TrafficStats (reads kernel counters directly)
@@ -104,11 +104,12 @@ class TrafficAnalyzerVpnService : VpnService() {
     private val recentTlsInfo = ConcurrentHashMap<String, TlsConnectionInfo>() // "ip:port" -> info
 
     // Per-app destination tracking - maps uid -> list of (destination, port, hostname, isEncrypted)
+    // Lists are guarded by synchronized(list): DNS pool threads write, the stats thread reads.
     data class DestinationInfo(
         val ip: String,
         val port: Int,
         val hostname: String?,
-        val isEncrypted: Boolean,
+        val isEncrypted: Boolean?,  // null = not measured
         val tlsVersion: TlsVersion? = null,
         var lastSeen: Long = System.currentTimeMillis()
     )
@@ -212,8 +213,9 @@ class TrafficAnalyzerVpnService : VpnService() {
             // Initialize traffic baseline
             initializeTrafficBaseline()
 
-            // Thread pool for DNS forwarding (4 threads for concurrent DNS)
-            dnsForwardingPool = Executors.newFixedThreadPool(4)
+            // Thread pool for DNS forwarding. Each forward blocks up to 2s on a reply,
+            // so 4 threads queued up bursts and slowed DNS device-wide.
+            dnsForwardingPool = Executors.newFixedThreadPool(16)
 
             // Single thread for reading packets
             packetReaderExecutor = Executors.newSingleThreadExecutor()
@@ -459,7 +461,12 @@ class TrafficAnalyzerVpnService : VpnService() {
                 }
                 socket.soTimeout = 2000
 
-                val dnsServer = InetAddress.getByName(UPSTREAM_DNS_1)
+                // Forward to the server the query was actually addressed to (8.8.8.8 or 8.8.4.4)
+                val dnsServer = if (ipVersion == 4) {
+                    InetAddress.getByAddress(packet.copyOfRange(16, 20))
+                } else {
+                    InetAddress.getByAddress(packet.copyOfRange(24, 40))
+                }
                 val request = DatagramPacket(dnsPayload, dnsPayload.size, dnsServer, DNS_PORT)
                 socket.send(request)
 
@@ -781,6 +788,18 @@ class TrafficAnalyzerVpnService : VpnService() {
     private fun pollNetworkStats() {
         if (!running) return
 
+        // An exception escaping a scheduleWithFixedDelay task silently cancels all
+        // future runs, which would stop byte counting for the rest of the session.
+        try {
+            pollTrafficCounters()
+        } catch (e: Exception) {
+            Log.e(TAG, "Stats poll failed", e)
+        } finally {
+            trafficRepository?.publish()
+        }
+    }
+
+    private fun pollTrafficCounters() {
         // If TrafficStats has been detected as non-functional, use NetworkStatsManager
         if (useNetworkStatsManagerPolling) {
             pollViaNetworkStatsManager()
@@ -934,40 +953,43 @@ class TrafficAnalyzerVpnService : VpnService() {
         val selectedSet = selectedAppsStore?.current ?: emptySet()
         if (selectedSet.isNotEmpty() && !selectedSet.contains(appInfo.packageName)) return
 
-        // Get known TLS destinations for this app
-        val tlsDestinations = appDestinations[uid]
+        val now = System.currentTimeMillis()
 
-        // Get domains this app has queried via DNS
-        val appDomains = appDnsQueries[uid]
+        // Known destinations for this app (from TLS handshakes or DNS answers)
+        val bestDest = appDestinations[uid]?.let { dests ->
+            synchronized(dests) {
+                dests.filter { now - it.lastSeen < 60_000 }.maxByOrNull { it.lastSeen } ?: dests.lastOrNull()
+            }
+        }
+
+        // Most recent domain this app has queried via DNS
+        val recentDomain = appDnsQueries[uid]?.let { domains -> synchronized(domains) { domains.lastOrNull() } }
 
         // SCIENTIFIC INTEGRITY: NetworkStats/TrafficStats reports TOTAL bytes per UID.
         // We do NOT know how those bytes are distributed across destinations.
         // We record a single ConnectionInfo entry per poll with the full byte totals,
-        // using the best available destination info (TLS > DNS > unknown).
+        // using the best available destination info (TLS/DNS destination > DNS domain > unattributed).
         //
         // We NEVER fabricate per-destination byte distributions by dividing evenly,
         // as that would be invented data unsuitable for scientific analysis.
 
         when {
-            !tlsDestinations.isNullOrEmpty() -> {
-                // We have actual TLS destinations — use the most recently seen one
-                // for hostname/encryption metadata, but report ALL bytes in one entry.
-                val bestDest = tlsDestinations
-                    .filter { System.currentTimeMillis() - it.lastSeen < 60_000 }
-                    .maxByOrNull { it.lastSeen }
-                    ?: tlsDestinations.last()
-
+            bestDest != null -> {
+                // Use the most recently seen destination for metadata, but report ALL
+                // bytes in one entry. Port/protocol/encryption/SNI are only set when a
+                // TLS handshake was actually observed; DNS-only destinations leave them unknown.
+                val tlsObserved = bestDest.tlsVersion != null
                 val connection = ConnectionInfo(
-                    timestamp = System.currentTimeMillis(),
+                    timestamp = now,
                     destinationAddress = bestDest.ip,
                     destinationPort = bestDest.port,
-                    protocol = Protocol.TCP,
+                    protocol = if (tlsObserved) Protocol.TCP else Protocol.OTHER,
                     bytesSent = txBytes,
                     bytesReceived = rxBytes,
                     hostname = bestDest.hostname,
                     isEncrypted = bestDest.isEncrypted,
                     tlsVersion = bestDest.tlsVersion?.name,
-                    sniHostname = bestDest.hostname
+                    sniHostname = bestDest.hostname.takeIf { tlsObserved }
                 )
 
                 trafficRepository?.recordConnection(
@@ -978,24 +1000,22 @@ class TrafficAnalyzerVpnService : VpnService() {
                     connection = connection
                 )
             }
-            !appDomains.isNullOrEmpty() -> {
+            recentDomain != null -> {
                 // We have DNS domains but NO TLS handshake observed.
                 // We know the app resolved these domains, but we do NOT know:
                 // - which port was used (could be 443, 80, or anything)
                 // - which protocol (could be TCP, UDP, QUIC)
                 // - whether the connection was encrypted
                 // Mark all these as unknown/unverified for scientific accuracy.
-                val recentDomain = appDomains.last()
-
                 val connection = ConnectionInfo(
-                    timestamp = System.currentTimeMillis(),
+                    timestamp = now,
                     destinationAddress = recentDomain,
                     destinationPort = 0,        // UNKNOWN — not measured
                     protocol = Protocol.OTHER,   // UNKNOWN — not measured
                     bytesSent = txBytes,
                     bytesReceived = rxBytes,
                     hostname = recentDomain,
-                    isEncrypted = false          // UNKNOWN — not measured, default to false
+                    isEncrypted = null           // UNKNOWN — not measured
                 )
 
                 trafficRepository?.recordConnection(
@@ -1007,17 +1027,17 @@ class TrafficAnalyzerVpnService : VpnService() {
                 )
             }
             else -> {
-                // No destination info — record with "unknown" destination
+                // No destination info — record as unattributed.
                 // This ensures we still capture traffic bytes even without DNS/TLS info
                 val connection = ConnectionInfo(
-                    timestamp = System.currentTimeMillis(),
-                    destinationAddress = "unknown",
+                    timestamp = now,
+                    destinationAddress = UNATTRIBUTED,
                     destinationPort = 0,
                     protocol = Protocol.OTHER,
                     bytesSent = txBytes,
                     bytesReceived = rxBytes,
                     hostname = null,
-                    isEncrypted = false
+                    isEncrypted = null
                 )
 
                 trafficRepository?.recordConnection(
@@ -1042,18 +1062,20 @@ class TrafficAnalyzerVpnService : VpnService() {
 
         // Track this domain for this app (for traffic attribution)
         val domains = appDnsQueries.getOrPut(uid) { mutableListOf() }
-        if (!domains.contains(domain)) {
-            domains.add(domain)
-            // Keep only last 20 domains per app
-            if (domains.size > 20) {
-                domains.removeAt(0)
+        synchronized(domains) {
+            if (!domains.contains(domain)) {
+                domains.add(domain)
+                // Keep only last 20 domains per app
+                if (domains.size > 20) {
+                    domains.removeAt(0)
+                }
             }
         }
 
-        // Track destinations from DNS responses
+        // Track destinations from DNS responses. Port and encryption are NOT known
+        // from a DNS answer, so they stay unknown (port 0, encryption null).
         responseAddresses.forEach { ip ->
-            // Assume HTTPS (443) as default since most traffic is encrypted
-            addDestinationForApp(uid, ip, 443, domain, true, null)
+            addDestinationForApp(uid, ip, 0, domain, null, null)
         }
 
         val query = DnsQuery(
@@ -1130,9 +1152,12 @@ class TrafficAnalyzerVpnService : VpnService() {
     /**
      * Track a destination for an app (from DNS or TLS).
      */
-    private fun addDestinationForApp(uid: Int, ip: String, port: Int, hostname: String?, isEncrypted: Boolean, tlsVersion: TlsVersion? = null) {
+    private fun addDestinationForApp(uid: Int, ip: String, port: Int, hostname: String?, isEncrypted: Boolean?, tlsVersion: TlsVersion? = null) {
         val destinations = appDestinations.getOrPut(uid) { mutableListOf() }
+        synchronized(destinations) { addDestination(destinations, ip, port, hostname, isEncrypted, tlsVersion) }
+    }
 
+    private fun addDestination(destinations: MutableList<DestinationInfo>, ip: String, port: Int, hostname: String?, isEncrypted: Boolean?, tlsVersion: TlsVersion?) {
         // Check if we already have this destination
         val existing = destinations.find { it.ip == ip && it.port == port }
         if (existing != null) {
@@ -1170,6 +1195,9 @@ class TrafficAnalyzerVpnService : VpnService() {
 
         try { vpnInterface?.close() } catch (e: Exception) {}
         vpnInterface = null
+
+        // Flush anything recorded since the last poll (e.g. late DNS answers)
+        trafficRepository?.publish()
 
         pendingDnsQueries.clear()
         dnsCache.clear()

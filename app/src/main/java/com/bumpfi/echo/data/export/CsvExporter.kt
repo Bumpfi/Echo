@@ -290,7 +290,7 @@ class CsvExporter(private val context: Context) {
         // Encryption Metrics (rate as 0-1 ratio)
         val encryptedConnections = app.encryptedConnections
         val unencryptedConnections = app.unencryptedConnections
-        val encryptionRate = safeDivide(encryptedConnections.toDouble(), totalConnections.toDouble())
+        val encryptionRate = app.encryptionRate // over connections with known encryption
 
         // Protocol Metrics (shares as 0-1 ratio)
         val tcpConnections = app.tcpConnections
@@ -586,7 +586,7 @@ class CsvExporter(private val context: Context) {
                             escapeCsvField(conn.hostname ?: ""),
                             escapeCsvField(conn.sniHostname ?: ""),
                             escapeCsvField(conn.country ?: ""),
-                            conn.isEncrypted.toString(),
+                            conn.isEncrypted?.toString() ?: "unknown",
                             escapeCsvField(conn.tlsVersion ?: ""),
                             conn.connectionDuration.toString(),
                             classification.isTracker().toString(),
@@ -678,7 +678,11 @@ class CsvExporter(private val context: Context) {
                         val (ip, port, protocol) = key
                         val hostname = connections.firstNotNullOfOrNull { it.sniHostname ?: it.hostname } ?: ""
                         val country = connections.firstNotNullOfOrNull { it.country } ?: ""
-                        val isEncrypted = connections.any { it.isEncrypted }
+                        val isEncrypted = when {
+                            connections.any { it.isEncrypted == true } -> "true"
+                            connections.any { it.isEncrypted == false } -> "false"
+                            else -> "unknown"
+                        }
                         val isThirdParty = thirdPartyDests.contains(ip)
                         val totalBytes = connections.sumOf { it.totalBytes }
 
@@ -691,7 +695,7 @@ class CsvExporter(private val context: Context) {
                             protocol.name,
                             connections.size.toString(),
                             totalBytes.toString(),
-                            isEncrypted.toString(),
+                            isEncrypted,
                             isThirdParty.toString(),
                             escapeCsvField(country)
                         ).joinToString(",")

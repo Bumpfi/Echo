@@ -15,7 +15,6 @@ import com.bumpfi.echo.data.AppInfoManager
 import com.bumpfi.echo.data.TrafficRepository
 import com.bumpfi.echo.data.export.CsvExporter
 import com.bumpfi.echo.data.model.AppTrafficInfo
-import com.bumpfi.echo.data.model.ConnectionInfo
 import com.bumpfi.echo.data.SelectedAppsStore
 import com.bumpfi.echo.vpn.TrafficAnalyzerVpnService
 import kotlinx.coroutines.delay
@@ -44,6 +43,10 @@ class TrafficViewModel(application: Application) : AndroidViewModel(application)
     // UI State
     private val _uiState = MutableStateFlow(TrafficUiState())
     val uiState: StateFlow<TrafficUiState> = _uiState.asStateFlow()
+
+    // Session duration, kept out of uiState so the 1s tick only redraws the timer
+    private val _sessionDuration = MutableStateFlow(0L)
+    val sessionDuration: StateFlow<Long> = _sessionDuration.asStateFlow()
 
     // VPN running state
     private val _isRecording = MutableStateFlow(false)
@@ -153,9 +156,7 @@ class TrafficViewModel(application: Application) : AndroidViewModel(application)
             while (isActive) {
                 if (TrafficAnalyzerVpnService.isRunning) {
                     val duration = trafficRepository.getSessionDuration()
-                    _uiState.value = _uiState.value.copy(
-                        sessionDuration = duration
-                    )
+                    _sessionDuration.value = duration
 
                     // Auto-stop after 6 minutes if enabled
                     if (_autoStopEnabled.value && duration >= AUTO_STOP_DURATION_MS) {
@@ -277,18 +278,12 @@ class TrafficViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /**
-     * Get connections for selected app.
-     */
-    fun getConnectionsForApp(packageName: String): List<ConnectionInfo> {
-        return trafficRepository.getConnectionsForApp(packageName)
-    }
-
-    /**
      * Clear all recorded data including cached CSV exports.
      */
     fun clearData() {
         trafficRepository.clearAll()
         _uiState.value = TrafficUiState()
+        _sessionDuration.value = 0
 
         // Delete old CSV exports so no stale data remains
         try {
@@ -349,6 +344,7 @@ class TrafficViewModel(application: Application) : AndroidViewModel(application)
         run: Int = 1,
         metadataProvider: ((AppTrafficInfo) -> Pair<String, String>)? = null
     ): Map<String, String> {
+        trafficRepository.publish() // include anything recorded since the last poll
         val apps = trafficRepository.appTrafficList.value
         val sessionDurationMs = trafficRepository.getSessionDuration()
         val sessionStartTime = trafficRepository.getSessionStartTime()
@@ -374,7 +370,6 @@ data class TrafficUiState(
     val totalBytesSent: Long = 0,
     val totalBytesReceived: Long = 0,
     val connectionCount: Int = 0,
-    val sessionDuration: Long = 0,
     val statusMessage: String = "Tap to start recording",
     val hasUsageStatsPermission: Boolean = false
 ) {

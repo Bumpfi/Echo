@@ -10,6 +10,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -28,8 +29,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
+import com.bumpfi.echo.data.AppInfoManager
 import com.bumpfi.echo.data.model.AppTrafficInfo
 import com.bumpfi.echo.ui.viewmodel.TrafficUiState
+import kotlinx.coroutines.flow.first
 
 /**
  * Main Dashboard Screen showing traffic overview and app list.
@@ -38,6 +41,7 @@ import com.bumpfi.echo.ui.viewmodel.TrafficUiState
 @Composable
 fun DashboardScreen(
     uiState: TrafficUiState,
+    sessionDuration: () -> Long,
     onToggleRecording: () -> Unit,
     onAppClick: (AppTrafficInfo) -> Unit,
     onSettingsClick: () -> Unit,
@@ -62,6 +66,15 @@ fun DashboardScreen(
                 app.packageName.contains(searchQuery, ignoreCase = true)
             }
         }
+    }
+
+    // Don't reorder the list under the user's finger: hold new data back while a
+    // scroll/fling is in progress and apply it as soon as the list comes to rest.
+    val listState = rememberLazyListState()
+    var shownAppList by remember { mutableStateOf(filteredAppList) }
+    LaunchedEffect(filteredAppList) {
+        snapshotFlow { listState.isScrollInProgress }.first { !it }
+        shownAppList = filteredAppList
     }
 
     Scaffold(
@@ -136,6 +149,7 @@ fun DashboardScreen(
         modifier = modifier
     ) { padding ->
         LazyColumn(
+            state = listState,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding),
@@ -170,7 +184,7 @@ fun DashboardScreen(
                 RecordingControlCard(
                     isRecording = uiState.isRecording,
                     onToggle = onToggleRecording,
-                    sessionDuration = uiState.sessionDuration,
+                    sessionDuration = sessionDuration,
                     formatDuration = formatDuration,
                     autoStopEnabled = autoStopEnabled,
                     onToggleAutoStop = onToggleAutoStop
@@ -186,7 +200,7 @@ fun DashboardScreen(
             }
 
             // App Traffic Header
-            if (filteredAppList.isNotEmpty()) {
+            if (shownAppList.isNotEmpty()) {
                 item {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -201,7 +215,7 @@ fun DashboardScreen(
                         )
                         if (searchQuery.isNotBlank()) {
                             Text(
-                                text = "${filteredAppList.size} of ${uiState.appTrafficList.size}",
+                                text = "${shownAppList.size} of ${uiState.appTrafficList.size}",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.outline,
                                 modifier = Modifier.padding(top = 8.dp)
@@ -212,7 +226,7 @@ fun DashboardScreen(
 
                 // App Traffic List (filtered)
                 items(
-                    items = filteredAppList,
+                    items = shownAppList,
                     key = { it.packageName }
                 ) { app ->
                     AppTrafficCard(
@@ -330,7 +344,7 @@ fun NoSearchResultsCard(searchQuery: String) {
 fun RecordingControlCard(
     isRecording: Boolean,
     onToggle: () -> Unit,
-    sessionDuration: Long,
+    sessionDuration: () -> Long,
     formatDuration: (Long) -> String,
     autoStopEnabled: Boolean,
     onToggleAutoStop: () -> Unit
@@ -403,7 +417,7 @@ fun RecordingControlCard(
             // Duration display
             if (isRecording) {
                 Text(
-                    text = formatDuration(sessionDuration),
+                    text = formatDuration(sessionDuration()),
                     style = MaterialTheme.typography.displayMedium,
                     fontWeight = FontWeight.Light,
                     color = MaterialTheme.colorScheme.onPrimaryContainer
@@ -741,11 +755,11 @@ fun AppIconImage(
     modifier: Modifier = Modifier
 ) {
     if (drawable != null) {
-        val bitmap = remember(drawable) {
-            drawable.toBitmap(width = 96, height = 96)
+        val painter = remember(drawable) {
+            BitmapPainter(drawable.toBitmap(width = AppInfoManager.ICON_SIZE_PX, height = AppInfoManager.ICON_SIZE_PX).asImageBitmap())
         }
         Image(
-            painter = BitmapPainter(bitmap.asImageBitmap()),
+            painter = painter,
             contentDescription = null,
             modifier = modifier.clip(RoundedCornerShape(12.dp))
         )

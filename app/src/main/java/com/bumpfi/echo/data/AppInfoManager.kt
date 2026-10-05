@@ -1,19 +1,30 @@
 package com.bumpfi.echo.data
 
 import android.content.Context
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.graphics.drawable.Drawable
 import android.os.Build
+import androidx.core.graphics.drawable.toBitmap
+import androidx.core.graphics.drawable.toDrawable
 import com.bumpfi.echo.data.model.AppTrafficInfo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Manager for retrieving information about installed apps.
  */
 class AppInfoManager(private val context: Context) {
 
+    companion object {
+        // Must match the size AppIconImage requests, so toBitmap() there returns this bitmap as-is
+        const val ICON_SIZE_PX = 96
+    }
+
     private val packageManager: PackageManager = context.packageManager
-    private val appCache = mutableMapOf<String, AppTrafficInfo>()
+    // Keyed by UID; read/written from VPN threads concurrently
+    private val appCache = ConcurrentHashMap<Int, AppTrafficInfo>()
 
     /**
      * Get all installed apps that can use the network.
@@ -35,11 +46,7 @@ class AppInfoManager(private val context: Context) {
             if (!hasInternetPermission(appInfo.packageName)) continue
 
             val appName = appInfo.loadLabel(packageManager).toString()
-            val appIcon = try {
-                appInfo.loadIcon(packageManager)
-            } catch (e: Exception) {
-                null
-            }
+            val appIcon = loadIconBitmap(appInfo)
 
             apps.add(
                 AppTrafficInfo(
@@ -75,11 +82,24 @@ class AppInfoManager(private val context: Context) {
     }
 
     /**
+     * Load the app icon and rasterize it once, here on the calling (background) thread.
+     * The UI then gets a ready BitmapDrawable instead of drawing adaptive icons on the
+     * main thread every time a list item is composed.
+     */
+    private fun loadIconBitmap(appInfo: ApplicationInfo): Drawable? = try {
+        appInfo.loadIcon(packageManager)
+            .toBitmap(ICON_SIZE_PX, ICON_SIZE_PX)
+            .toDrawable(context.resources)
+    } catch (e: Exception) {
+        null
+    }
+
+    /**
      * Get app info by UID.
      */
     fun getAppByUid(uid: Int): AppTrafficInfo? {
         // Check cache first
-        appCache.values.find { it.uid == uid }?.let { return it }
+        appCache[uid]?.let { return it }
 
         // Look up by UID
         val packages = packageManager.getPackagesForUid(uid) ?: return null
@@ -99,11 +119,11 @@ class AppInfoManager(private val context: Context) {
             val trafficInfo = AppTrafficInfo(
                 packageName = packageName,
                 appName = appInfo.loadLabel(packageManager).toString(),
-                appIcon = try { appInfo.loadIcon(packageManager) } catch (e: Exception) { null },
+                appIcon = loadIconBitmap(appInfo),
                 uid = uid
             )
 
-            appCache[packageName] = trafficInfo
+            appCache[uid] = trafficInfo
             trafficInfo
         } catch (e: Exception) {
             null
