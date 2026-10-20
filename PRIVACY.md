@@ -30,7 +30,7 @@ Echo does not request `READ_PHONE_STATE`, location, contacts or any other person
 
 **Changes.** Changes to this policy are published in this file in the source repository.
 
-**Contact.** <CONTACT_EMAIL>
+**Contact.** bumpfi.apps@gmail.com
 
 ## Deutsch
 
@@ -58,4 +58,4 @@ Echo fordert weder `READ_PHONE_STATE` noch Standort, Kontakte oder andere person
 
 **Änderungen.** Änderungen dieser Erklärung werden in dieser Datei im Quellcode-Repository veröffentlicht.
 
-**Kontakt.** <CONTACT_EMAIL>
+**Kontakt.** bumpfi.apps@gmail.com
