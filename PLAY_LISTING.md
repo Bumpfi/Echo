@@ -40,3 +40,43 @@ Why "No collection": Google defines "collect" as data transmitted off the device
 - **Content rating:** Utility, no user-generated content, no sharing.
 - **Health / financial / government features:** None.
 - **Permissions removed in 2.2:** `READ_PHONE_STATE` (was never requested at runtime).
+
+## Store listing (en-US)
+
+Graphics in `play/`: `icon_512.png`, `feature_graphic.png` (1024×500), `screenshot_1-4.png` (1080×1920).
+
+**Short description (≤80):**
+
+See which apps contact which domains. Local DNS-only VPN, all data on-device.
+
+**Full description:**
+
+Echo shows you which apps on your phone go online, how much data they send and receive, and which domains they look up – live, while you use your phone.
+
+Echo was built as a research tool for a master's thesis on app telemetry. It is open source and needs no root.
+
+HOW IT WORKS
+• Tap Start and accept Android's VPN dialog.
+• Echo creates a local VPN on your device that only handles DNS. Each DNS lookup is matched to the app that made it and forwarded unchanged to Cloudflare's resolver (1.1.1.1). All other traffic goes directly to the network, untouched.
+• Per-app data volumes come from Android's own network statistics.
+
+FEATURES
+• Live dashboard: sent/received data and active apps
+• Per-app detail: traffic summary, destinations and every DNS lookup with timestamp
+• Choose which apps to analyze
+• Optional auto-stop timer
+• CSV export (metrics, connections, DNS, destinations) for your own analysis
+
+PRIVACY
+• No account, no ads, no analytics, no tracking.
+• All recordings stay on your device. Nothing is sent to the developer.
+• CSV files are only created when you tap Export.
+• Open source: github.com/Bumpfi/Echo
+
+PERMISSIONS
+• VPN: to observe DNS lookups on the device
+• Query all packages: to show traffic by app name and icon
+• Usage access (optional): for per-app byte counts
+• Notifications: shows that recording is active
+
+Echo does not block, modify or redirect any traffic.
