@@ -46,9 +46,9 @@ class TrafficAnalyzerVpnService : VpnService() {
         private const val VPN_PREFIX_LENGTH = 32
         private const val VPN_MTU = 1500
 
-        // DNS servers
-        private const val UPSTREAM_DNS_1 = "8.8.8.8"
-        private const val UPSTREAM_DNS_2 = "8.8.4.4"
+        // DNS servers (Cloudflare)
+        private const val UPSTREAM_DNS_1 = "1.1.1.1"
+        private const val UPSTREAM_DNS_2 = "1.0.0.1"
         private const val DNS_PORT = 53
 
         // Actions
@@ -461,7 +461,7 @@ class TrafficAnalyzerVpnService : VpnService() {
                 }
                 socket.soTimeout = 2000
 
-                // Forward to the server the query was actually addressed to (8.8.8.8 or 8.8.4.4)
+                // Forward to the server the query was actually addressed to (1.1.1.1 or 1.0.0.1)
                 val dnsServer = if (ipVersion == 4) {
                     InetAddress.getByAddress(packet.copyOfRange(16, 20))
                 } else {

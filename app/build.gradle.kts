@@ -12,17 +12,29 @@ android {
         applicationId = "com.bumpfi.echo"
         minSdk = 24
         targetSdk = 35
-        versionCode = 2
-        versionName = "2.0"
+        versionCode = 3
+        versionName = "2.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        // Release key comes from env (CI secrets); without it, release falls back to the debug key for local testing
+        System.getenv("ECHO_KEYSTORE")?.let { path ->
+            create("release") {
+                storeFile = file(path)
+                storePassword = System.getenv("ECHO_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("ECHO_KEY_ALIAS")
+                keyPassword = System.getenv("ECHO_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // ponytail: debug key so the release build installs for local perf testing; swap for a real keystore before distributing
-            signingConfig = signingConfigs.getByName("debug")
-            isMinifyEnabled = false
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -59,14 +71,6 @@ dependencies {
 
     // Icons extended
     implementation(libs.androidx.compose.material.icons.extended)
-
-    // Coil for app icons
-    implementation(libs.coil.compose)
-
-    // Room for local database
-    implementation(libs.androidx.room.runtime)
-    implementation(libs.androidx.room.ktx)
-    annotationProcessor(libs.androidx.room.compiler)
 
     // Coroutines
     implementation(libs.kotlinx.coroutines.android)

@@ -127,7 +127,7 @@ app/src/main/java/com/bumpfi/echo/
 
 ### TrafficAnalyzerVpnService
 - Establishes VPN with DNS-only routing
-- Forwards DNS queries to upstream server (8.8.8.8)
+- Forwards DNS queries to upstream server (Cloudflare 1.1.1.1)
 - Parses DNS responses for domain/IP mapping
 - Polls NetworkStatsManager for per-app byte counts
 - Attributes traffic to apps using UID mapping

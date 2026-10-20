@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.Process
 import android.provider.Settings
 import android.util.Log
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.bumpfi.echo.data.AppInfoManager
@@ -196,7 +197,7 @@ class TrafficViewModel(application: Application) : AndroidViewModel(application)
             val intent = Intent(context, TrafficAnalyzerVpnService::class.java).apply {
                 action = TrafficAnalyzerVpnService.ACTION_START
             }
-            context.startForegroundService(intent)
+            ContextCompat.startForegroundService(context, intent)
 
             _isRecording.value = true
             _uiState.value = _uiState.value.copy(
