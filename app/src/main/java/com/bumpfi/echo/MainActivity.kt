@@ -1,6 +1,9 @@
 package com.bumpfi.echo
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -20,7 +23,7 @@ import com.bumpfi.echo.ui.viewmodel.TrafficViewModel
  *
  * This activity:
  * 1. Sets up Compose UI with Material 3 theming
- * 2. Handles VPN permission requests
+ * 2. Handles VPN and notification permission requests
  * 3. Hosts the navigation graph
  */
 class MainActivity : ComponentActivity() {
@@ -36,12 +39,23 @@ class MainActivity : ComponentActivity() {
         viewModel.updateVpnState()
     }
 
+    // Recording notification is hidden on API 33+ unless granted; VPN works either way
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         viewModel = ViewModelProvider(this)[TrafficViewModel::class.java]
 
         enableEdgeToEdge()
+
+        if (savedInstanceState == null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
 
         setContent {
             EchoTheme {

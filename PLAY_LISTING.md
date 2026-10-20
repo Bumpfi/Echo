@@ -1,6 +1,6 @@
 # Play Console declarations — Echo 2.2 (versionCode 4)
 
-Drafts to paste into Play Console. Privacy policy URL: link to `PRIVACY.md` on GitHub (e.g. `https://github.com/bumpfi/Echo/blob/main/PRIVACY.md`).
+Drafts to paste into Play Console. Hi-res icon (512×512 PNG): `play/icon_512.png`. Privacy policy URL: link to `PRIVACY.md` on GitHub (e.g. `https://github.com/bumpfi/Echo/blob/main/PRIVACY.md`).
 
 ## VpnService declaration
 
