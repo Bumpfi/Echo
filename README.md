@@ -145,15 +145,6 @@ app/src/main/java/com/bumpfi/echo/
 - Calculates session statistics
 - Provides JSON export functionality
 
-## For Scientific Research
-
-See [SCIENTIFIC_DATA_COLLECTION_GUIDE.md](SCIENTIFIC_DATA_COLLECTION_GUIDE.md) for:
-- Detailed data schema documentation
-- Step-by-step empirical study tutorial
-- Python analysis code examples
-- Statistical analysis guidance
-- Limitations and validity considerations
-
 ## License
 
 [Add your license here]
